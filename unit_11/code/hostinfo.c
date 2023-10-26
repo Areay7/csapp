@@ -33,7 +33,7 @@ int main(int argc, char **argv)
     }
 
     /* Walk the list and display each IP address */
-    flags = NI_NUMERICHOST; /* Display address string instead of domain name */
+    flags = NI_NUMERICSERV; /* Display address string instead of domain name */
     for (p = listp; p; p = p->ai_next)
     {
         getnameinfo(p->ai_addr, p->ai_addrlen, buf, MAXLINE, NULL, 0, flags);

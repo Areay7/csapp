@@ -79,3 +79,10 @@ struct addrinfo
 /* 返回：若成功则为0，若错误则为非零的错误代码 */
 int getnameinfo(const struct sockaddr *sa, socklen_t salen,
                 char *host, size_t hostlen, char *setvice, size_t servlen, int flags);
+
+
+/* 返回：若成功则为描述符，若出错则为-1 */
+int open_clientfd(char *hostname, char *port);
+
+/* 返回：若成功则为描述符，若出错则为-1 */
+int open_listenfd(char *port);
