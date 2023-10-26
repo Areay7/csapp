@@ -18,7 +18,7 @@ int main(int argc, char **argv)
 
     if (argc != 2)
     {
-        fprintf(stderr, "usageL %s <domain name>  \n", argv[0]);
+        fprintf(stderr, "usage: %s <domain name> \n", argv[0]);
         exit(0);
     }
 
@@ -31,10 +31,10 @@ int main(int argc, char **argv)
         fprintf(stderr, "getaddrinfo error: %s \n", gai_strerror(rc));
         exit(1);
     }
-    
+
     /* Walk the list and display each IP address */
     flags = NI_NUMERICHOST; /* Display address string instead of domain name */
-    for (p = listp; p;p = p->ai_next)
+    for (p = listp; p; p = p->ai_next)
     {
         getnameinfo(p->ai_addr, p->ai_addrlen, buf, MAXLINE, NULL, 0, flags);
         printf("%s\n", buf);
@@ -42,6 +42,6 @@ int main(int argc, char **argv)
 
     /* Clean up */
     freeaddrinfo(listp);
-    
+
     exit(0);
 }
