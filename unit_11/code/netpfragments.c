@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <netdb.h>
 
 // struct in_addr
 // {
@@ -53,3 +54,28 @@ int listen(int socket, int backlog);
 
 /* 返回：若成功则为非负描述符，若出错则为-1 */
 int accept(int listenfd, struct sockaddr *addr, int *addrlen);
+
+/* 返回：若成功则为0，若出错则为-1 */
+int getaddinfo(const char *host, const char *service,
+               const struct addrinfo *hints, struct addrinfo **result);
+
+/* 返回：无 */
+void freeaddrinfo(struct addrinfo *result);
+
+/* 返回：错误消息 */
+const char *gai_strerror(int errcode);
+
+struct addrinfo
+{
+    int ai_flags;             /* Hints argument flags */
+    int ai_family;            /* First arg to socket function */
+    int ai_socktype;          /* Second arg to socket function */
+    int protocol;             /* Third arg to socket function */
+    char *ai_cannonname;      /* Canonical hostname */
+    size_t sockaddr *ai_addr; /* Ptr to socket addrss structue */
+    struct addrinfo *ai_next; /* Ptr to next item in linked list */
+};
+
+/* 返回：若成功则为0，若错误则为非零的错误代码 */
+int getnameinfo(const struct sockaddr *sa, socklen_t salen,
+                char *host, size_t hostlen, char *setvice, size_t servlen, int flags);
