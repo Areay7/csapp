@@ -10,8 +10,6 @@
 
 #define MAXLINE 8192 /* Max text line length */
 
-
-
 int open_clientfd(char *hostname, char *port)
 {
     int clientfd;

@@ -1,168 +1,244 @@
-/* $begin csapp.h */
-#ifndef __CSAPP_H__
-#define __CSAPP_H__
+/* $begin tinymain */
+/*
+ * tiny.c - A simple, iterative HTTP/1.0 Web server that uses the
+ *     GET method to serve static and dynamic content.
+ */
+#include "csapp.h"
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <ctype.h>
-#include <setjmp.h>
-#include <signal.h>
-#include <sys/time.h>
-#include <sys/types.h>
-#include <sys/wait.h>
-#include <sys/stat.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <errno.h>
-#include <math.h>
-#include <pthread.h>
-#include <semaphore.h>
-#include <sys/socket.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
+void doit(int fd);
+void read_requesthdrs(rio_t *rp);
+int parse_uri(char *uri, char *filename, char *cgiargs);
+void serve_static(int fd, char *filename, int filesize);
+void get_filetype(char *filename, char *filetype);
+void serve_dynamic(int fd, char *filename, char *cgiargs);
+void clienterror(int fd, char *cause, char *errnum,
+                 char *shortmsg, char *longmsg);
 
+int main(int argc, char **argv)
+{
+    int listenfd, connfd, port, clientlen;
+    struct sockaddr_in clientaddr;
 
-/* Default file permissions are DEF_MODE & ~DEF_UMASK */
-/* $begin createmasks */
-#define DEF_MODE   S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH
-#define DEF_UMASK  S_IWGRP|S_IWOTH
-/* $end createmasks */
+    /* Check command line args */
+    if (argc != 2)
+    {
+        fprintf(stderr, "usage: %s <port>\n", argv[0]);
+        exit(1);
+    }
+    port = atoi(argv[1]);
 
-/* Simplifies calls to bind(), connect(), and accept() */
-/* $begin sockaddrdef */
-typedef struct sockaddr SA;
-/* $end sockaddrdef */
+    listenfd = Open_listenfd(port);
+    while (1)
+    {
+        clientlen = sizeof(clientaddr);
+        connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen); // line:netp:tiny:accept
+        doit(connfd);                                             // line:netp:tiny:doit
+        Close(connfd);                                            // line:netp:tiny:close
+    }
+}
+/* $end tinymain */
 
-/* Persistent state for the robust I/O (Rio) package */
-/* $begin rio_t */
-#define RIO_BUFSIZE 8192
-typedef struct {
-    int rio_fd;                /* Descriptor for this internal buf */
-    int rio_cnt;               /* Unread bytes in internal buf */
-    char *rio_bufptr;          /* Next unread byte in internal buf */
-    char rio_buf[RIO_BUFSIZE]; /* Internal buffer */
-} rio_t;
-/* $end rio_t */
+/*
+ * doit - handle one HTTP request/response transaction
+ */
+/* $begin doit */
+void doit(int fd)
+{
+    int is_static;
+    struct stat sbuf;
+    char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
+    char filename[MAXLINE], cgiargs[MAXLINE];
+    rio_t rio;
 
-/* External variables */
-extern int h_errno;    /* Defined by BIND for DNS errors */ 
-extern char **environ; /* Defined by libc */
+    /* Read request line and headers */
+    Rio_readinitb(&rio, fd);
+    Rio_readlineb(&rio, buf, MAXLINE);             // line:netp:doit:readrequest
+    sscanf(buf, "%s %s %s", method, uri, version); // line:netp:doit:parserequest
+    if (strcasecmp(method, "GET"))
+    { // line:netp:doit:beginrequesterr
+        clienterror(fd, method, "501", "Not Implemented",
+                    "Tiny does not implement this method");
+        return;
+    }                       // line:netp:doit:endrequesterr
+    read_requesthdrs(&rio); // line:netp:doit:readrequesthdrs
 
-/* Misc constants */
-#define	MAXLINE	 8192  /* Max text line length */
-#define MAXBUF   8192  /* Max I/O buffer size */
-#define LISTENQ  1024  /* Second argument to listen() */
+    /* Parse URI from GET request */
+    is_static = parse_uri(uri, filename, cgiargs); // line:netp:doit:staticcheck
+    if (stat(filename, &sbuf) < 0)
+    { // line:netp:doit:beginnotfound
+        clienterror(fd, filename, "404", "Not found",
+                    "Tiny couldn't find this file");
+        return;
+    } // line:netp:doit:endnotfound
 
-/* Our own error-handling functions */
-void unix_error(char *msg);
-void posix_error(int code, char *msg);
-void dns_error(char *msg);
-void app_error(char *msg);
+    if (is_static)
+    { /* Serve static content */
+        if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode))
+        { // line:netp:doit:readable
+            clienterror(fd, filename, "403", "Forbidden",
+                        "Tiny couldn't read the file");
+            return;
+        }
+        serve_static(fd, filename, sbuf.st_size); // line:netp:doit:servestatic
+    }
+    else
+    { /* Serve dynamic content */
+        if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode))
+        { // line:netp:doit:executable
+            clienterror(fd, filename, "403", "Forbidden",
+                        "Tiny couldn't run the CGI program");
+            return;
+        }
+        serve_dynamic(fd, filename, cgiargs); // line:netp:doit:servedynamic
+    }
+}
+/* $end doit */
 
-/* Process control wrappers */
-pid_t Fork(void);
-void Execve(const char *filename, char *const argv[], char *const envp[]);
-pid_t Wait(int *status);
-pid_t Waitpid(pid_t pid, int *iptr, int options);
-void Kill(pid_t pid, int signum);
-unsigned int Sleep(unsigned int secs);
-void Pause(void);
-unsigned int Alarm(unsigned int seconds);
-void Setpgid(pid_t pid, pid_t pgid);
-pid_t Getpgrp();
+/*
+ * read_requesthdrs - read and parse HTTP request headers
+ */
+/* $begin read_requesthdrs */
+void read_requesthdrs(rio_t *rp)
+{
+    char buf[MAXLINE];
 
-/* Signal wrappers */
-typedef void handler_t(int);
-handler_t *Signal(int signum, handler_t *handler);
-void Sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
-void Sigemptyset(sigset_t *set);
-void Sigfillset(sigset_t *set);
-void Sigaddset(sigset_t *set, int signum);
-void Sigdelset(sigset_t *set, int signum);
-int Sigismember(const sigset_t *set, int signum);
+    Rio_readlineb(rp, buf, MAXLINE);
+    while (strcmp(buf, "\r\n"))
+    { // line:netp:readhdrs:checkterm
+        Rio_readlineb(rp, buf, MAXLINE);
+        printf("%s", buf);
+    }
+    return;
+}
+/* $end read_requesthdrs */
 
-/* Unix I/O wrappers */
-int Open(const char *pathname, int flags, mode_t mode);
-ssize_t Read(int fd, void *buf, size_t count);
-ssize_t Write(int fd, const void *buf, size_t count);
-off_t Lseek(int fildes, off_t offset, int whence);
-void Close(int fd);
-int Select(int  n, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, 
-	   struct timeval *timeout);
-int Dup2(int fd1, int fd2);
-void Stat(const char *filename, struct stat *buf);
-void Fstat(int fd, struct stat *buf) ;
+/*
+ * parse_uri - parse URI into filename and CGI args
+ *             return 0 if dynamic content, 1 if static
+ */
+/* $begin parse_uri */
+int parse_uri(char *uri, char *filename, char *cgiargs)
+{
+    char *ptr;
 
-/* Memory mapping wrappers */
-void *Mmap(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
-void Munmap(void *start, size_t length);
+    if (!strstr(uri, "cgi-bin"))
+    { /* Static content */                 // line:netp:parseuri:isstatic
+        strcpy(cgiargs, "");               // line:netp:parseuri:clearcgi
+        strcpy(filename, ".");             // line:netp:parseuri:beginconvert1
+        strcat(filename, uri);             // line:netp:parseuri:endconvert1
+        if (uri[strlen(uri) - 1] == '/')   // line:netp:parseuri:slashcheck
+            strcat(filename, "home.html"); // line:netp:parseuri:appenddefault
+        return 1;
+    }
+    else
+    { /* Dynamic content */    // line:netp:parseuri:isdynamic
+        ptr = index(uri, '?'); // line:netp:parseuri:beginextract
+        if (ptr)
+        {
+            strcpy(cgiargs, ptr + 1);
+            *ptr = '\0';
+        }
+        else
+            strcpy(cgiargs, ""); // line:netp:parseuri:endextract
+        strcpy(filename, ".");   // line:netp:parseuri:beginconvert2
+        strcat(filename, uri);   // line:netp:parseuri:endconvert2
+        return 0;
+    }
+}
+/* $end parse_uri */
 
-/* Standard I/O wrappers */
-void Fclose(FILE *fp);
-FILE *Fdopen(int fd, const char *type);
-char *Fgets(char *ptr, int n, FILE *stream);
-FILE *Fopen(const char *filename, const char *mode);
-void Fputs(const char *ptr, FILE *stream);
-size_t Fread(void *ptr, size_t size, size_t nmemb, FILE *stream);
-void Fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream);
+/*
+ * serve_static - copy a file back to the client
+ */
+/* $begin serve_static */
+void serve_static(int fd, char *filename, int filesize)
+{
+    int srcfd;
+    char *srcp, filetype[MAXLINE], buf[MAXBUF];
 
-/* Dynamic storage allocation wrappers */
-void *Malloc(size_t size);
-void *Realloc(void *ptr, size_t size);
-void *Calloc(size_t nmemb, size_t size);
-void Free(void *ptr);
+    /* Send response headers to client */
+    get_filetype(filename, filetype);    // line:netp:servestatic:getfiletype
+    sprintf(buf, "HTTP/1.0 200 OK\r\n"); // line:netp:servestatic:beginserve
+    sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
+    sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
+    sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
+    Rio_writen(fd, buf, strlen(buf)); // line:netp:servestatic:endserve
 
-/* Sockets interface wrappers */
-int Socket(int domain, int type, int protocol);
-void Setsockopt(int s, int level, int optname, const void *optval, int optlen);
-void Bind(int sockfd, struct sockaddr *my_addr, int addrlen);
-void Listen(int s, int backlog);
-int Accept(int s, struct sockaddr *addr, socklen_t *addrlen);
-void Connect(int sockfd, struct sockaddr *serv_addr, int addrlen);
+    /* Send response body to client */
+    srcfd = Open(filename, O_RDONLY, 0);                        // line:netp:servestatic:open
+    srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0); // line:netp:servestatic:mmap
+    Close(srcfd);                                               // line:netp:servestatic:close
+    Rio_writen(fd, srcp, filesize);                             // line:netp:servestatic:write
+    Munmap(srcp, filesize);                                     // line:netp:servestatic:munmap
+}
 
-/* DNS wrappers */
-struct hostent *Gethostbyname(const char *name);
-struct hostent *Gethostbyaddr(const char *addr, int len, int type);
+/*
+ * get_filetype - derive file type from file name
+ */
+void get_filetype(char *filename, char *filetype)
+{
+    if (strstr(filename, ".html"))
+        strcpy(filetype, "text/html");
+    else if (strstr(filename, ".gif"))
+        strcpy(filetype, "image/gif");
+    else if (strstr(filename, ".jpg"))
+        strcpy(filetype, "image/jpeg");
+    else
+        strcpy(filetype, "text/plain");
+}
+/* $end serve_static */
 
-/* Pthreads thread control wrappers */
-void Pthread_create(pthread_t *tidp, pthread_attr_t *attrp, 
-		    void * (*routine)(void *), void *argp);
-void Pthread_join(pthread_t tid, void **thread_return);
-void Pthread_cancel(pthread_t tid);
-void Pthread_detach(pthread_t tid);
-void Pthread_exit(void *retval);
-pthread_t Pthread_self(void);
-void Pthread_once(pthread_once_t *once_control, void (*init_function)());
+/*
+ * serve_dynamic - run a CGI program on behalf of the client
+ */
+/* $begin serve_dynamic */
+void serve_dynamic(int fd, char *filename, char *cgiargs)
+{
+    char buf[MAXLINE], *emptylist[] = {NULL};
 
-/* POSIX semaphore wrappers */
-void Sem_init(sem_t *sem, int pshared, unsigned int value);
-void P(sem_t *sem);
-void V(sem_t *sem);
+    /* Return first part of HTTP response */
+    sprintf(buf, "HTTP/1.0 200 OK\r\n");
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Server: Tiny Web Server\r\n");
+    Rio_writen(fd, buf, strlen(buf));
 
-/* Rio (Robust I/O) package */
-ssize_t rio_readn(int fd, void *usrbuf, size_t n);
-ssize_t rio_writen(int fd, void *usrbuf, size_t n);
-void rio_readinitb(rio_t *rp, int fd); 
-ssize_t	rio_readnb(rio_t *rp, void *usrbuf, size_t n);
-ssize_t	rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen);
+    if (Fork() == 0)
+    { /* child */ // line:netp:servedynamic:fork
+        /* Real server would set all CGI vars here */
+        setenv("QUERY_STRING", cgiargs, 1);                         // line:netp:servedynamic:setenv
+        Dup2(fd, STDOUT_FILENO); /* Redirect stdout to client */    // line:netp:servedynamic:dup2
+        Execve(filename, emptylist, environ); /* Run CGI program */ // line:netp:servedynamic:execve
+    }
+    Wait(NULL); /* Parent waits for and reaps child */ // line:netp:servedynamic:wait
+}
+/* $end serve_dynamic */
 
-/* Wrappers for Rio package */
-ssize_t Rio_readn(int fd, void *usrbuf, size_t n);
-void Rio_writen(int fd, void *usrbuf, size_t n);
-void Rio_readinitb(rio_t *rp, int fd); 
-ssize_t Rio_readnb(rio_t *rp, void *usrbuf, size_t n);
-ssize_t Rio_readlineb(rio_t *rp, void *usrbuf, size_t maxlen);
+/*
+ * clienterror - returns an error message to the client
+ */
+/* $begin clienterror */
+void clienterror(int fd, char *cause, char *errnum,
+                 char *shortmsg, char *longmsg)
+{
+    char buf[MAXLINE], body[MAXBUF];
 
-/* Client/server helper functions */
-int open_clientfd(char *hostname, int portno);
-int open_listenfd(int portno);
+    /* Build the HTTP response body */
+    sprintf(body, "<html><title>Tiny Error</title>");
+    sprintf(body, "%s<body bgcolor="
+                  "ffffff"
+                  ">\r\n",
+            body);
+    sprintf(body, "%s%s: %s\r\n", body, errnum, shortmsg);
+    sprintf(body, "%s<p>%s: %s\r\n", body, longmsg, cause);
+    sprintf(body, "%s<hr><em>The Tiny Web server</em>\r\n", body);
 
-/* Wrappers for client/server helper functions */
-int Open_clientfd(char *hostname, int port);
-int Open_listenfd(int port); 
-
-#endif /* __CSAPP_H__ */
-/* $end csapp.h */
+    /* Print the HTTP response */
+    sprintf(buf, "HTTP/1.0 %s %s\r\n", errnum, shortmsg);
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Content-type: text/html\r\n");
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Content-length: %d\r\n\r\n", (int)strlen(body));
+    Rio_writen(fd, buf, strlen(buf));
+    Rio_writen(fd, body, strlen(body));
+}
+/* $end clienterror */
